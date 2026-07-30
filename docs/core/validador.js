@@ -252,7 +252,14 @@ function _validar_empleado(liqui, recibo, match_via = 'legajo') {
   }
 
   // --- 3. Validacion de suma del grafico de torta (por pagina del recibo) ---
-  if (recibo.porcentajes_torta && recibo.porcentajes_torta.length > 0) {
+  // Cuando el bruto es 0 no hay nada que repartir: el recibo imprime todas las porciones
+  // en 0,00% y la suma da 0 legitimamente. Pasa con empleados de licencia sin goce, donde
+  // el descuento cancela los haberes y solo quedan contribuciones patronales. Exigir ~100%
+  // ahi es un falso positivo. Se pide que se cumplan LAS DOS condiciones (suma 0 y bruto 0)
+  // para no perder el chequeo cuando el bruto es real y la torta igual da 0.
+  const _tortaVacia = (recibo.bruto === 0 || recibo.bruto === null || recibo.bruto === undefined);
+  if (recibo.porcentajes_torta && recibo.porcentajes_torta.length > 0 &&
+      !(_tortaVacia && _round2(recibo.porcentajes_torta.reduce((a, b) => a + b, 0)) === 0)) {
     const total_pct = _round2(recibo.porcentajes_torta.reduce((a, b) => a + b, 0));
     if (Math.abs(total_pct - 100.0) > TOL_TORTA) {
       hallazgos.push(_crearHallazgo({

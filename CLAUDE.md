@@ -157,6 +157,11 @@ la versión JS. La versión canónica es la de `docs/` (JavaScript).
 - **Totales validados:** Neto, Bruto, Descuentos, Contribuciones, Costo Laboral (= Bruto +
   Contribuciones del recibo).
 - **Tolerancias:** ±$0,01 por concepto, ±$1,00 por total, ±1 punto para la suma de la torta.
+- **Torta con bruto 0: no se valida.** Si el bruto del recibo es 0 y los porcentajes suman 0, no
+  hay nada que repartir y el recibo imprime todas las porciones en 0,00%: exigir ~100% ahí es un
+  falso positivo. Pasa con empleados de **licencia sin goce**, donde el descuento cancela los
+  haberes y sólo quedan contribuciones patronales. Se piden **las dos** condiciones (suma 0 **y**
+  bruto 0) para no perder el chequeo cuando el bruto es real y la torta igual da 0.
 - **Empleados multi-bloque / multi-fecha:** se consolidan sumando.
 - **Multi-archivo (liquidación Y recibos):** ambos lados aceptan **varios archivos** y se
   cruzan contra un conjunto **unificado** (consolidado por legajo). Sirve para anexos o
