@@ -187,6 +187,15 @@ CUALQUIER cliente con esa variante, no sólo a ese lote:
    rótulos, gana `Costo Laboral:` (comportamiento previo intacto).
 4. **Porcentajes de la torta con coma decimal.** Se leían sólo como `1.27%`; con `1,27%` la lista
    quedaba vacía y la validación de la torta no corría (columna en `—`). Ahora acepta ambos.
+5. **Recibos partidos en dos hojas.** Hay plantillas (p. ej. la que emite HITSS) donde el recibo
+   ocupa 2 páginas: conceptos en la primera, y `COMPOSICION SALARIAL` + `SUELDO NETO` + torta en
+   la segunda, que **no repite** la fila `MES AÑO APELLIDO Y NOMBRE LEGAJO`. Esa segunda hoja se
+   descartaba por "no se detectó legajo", así que se perdían el **neto**, los **descuentos** y la
+   **torta**, y el validador los reportaba como `N/D` en todos los empleados. Ahora una página sin
+   encabezado que trae los rótulos del pie (`_MARCAS_CONTINUACION`) se **vuelca** sobre el recibo
+   anterior. Ojo con la diferencia: una continuación **completa** los campos que faltan
+   (`_mergeContinuacion`), mientras que un segundo recibo del mismo legajo **suma**
+   (`_mergePages`) — son casos distintos y no hay que confundirlos.
 
 **Impacto sobre el golden:** los cuatro son aditivos/fallbacks y no deberían moverlo (el formato
 Marval sigue por la misma rama). Las dos excepciones posibles, **a confirmar corriendo

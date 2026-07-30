@@ -216,6 +216,85 @@ function _parsePage(text, pageNum) {
   return rp;
 }
 
+// Rótulos que delatan que una página SIN encabezado es la CONTINUACIÓN del recibo
+// anterior, y no una página ajena. Hay plantillas que parten el recibo en dos hojas:
+// los conceptos en la primera y los totales + la torta en la segunda, que ya no repite
+// la fila 'MES AÑO APELLIDO Y NOMBRE LEGAJO'.
+const _MARCAS_CONTINUACION = [
+  'COMPOSICION SALARIAL',
+  'SUELDO NETO',
+  'Detalle composición laboral',
+  'Firma del Empleado',
+];
+
+function _esContinuacion(text) {
+  return _MARCAS_CONTINUACION.some((m) => text.includes(m));
+}
+
+/**
+ * Extrae de una página sin encabezado lo que se pueda atribuir al recibo anterior.
+ * A diferencia de _parsePage no exige legajo y no interpreta líneas de concepto: en una
+ * continuación no hay forma segura de saber si una línea suelta es haber o contribución,
+ * así que se toman sólo los datos rotulados, que son inequívocos.
+ */
+function _parseContinuacion(text) {
+  const out = {
+    neto: null,
+    composicion_rem: null,
+    composicion_no_rem: null,
+    composicion_desc: null,
+    porcentajes_torta: [],
+  };
+  let enPie = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) {
+      continue;
+    }
+    const mComp = line.match(
+      /Remunerativo:\s*\$\s*([\d,.]+)\s+No Remunerativo:\s*\$\s*([\d,.]+)\s+Descuentos:\s*\$\s*([\d,.]+)/
+    );
+    if (mComp) {
+      out.composicion_rem = parseMoney(mComp[1]);
+      out.composicion_no_rem = parseMoney(mComp[2]);
+      out.composicion_desc = parseMoney(mComp[3]);
+      continue;
+    }
+    const mNeto = line.match(/^SUELDO NETO\s+\$\s*([\d.,]+)/);
+    if (mNeto) {
+      out.neto = parseMoney(mNeto[1]);
+      enPie = true;
+      continue;
+    }
+    // Los porcentajes de la torta se cuentan sólo después del neto, igual que en
+    // _parsePage (estado PIE), para no confundirlos con alícuotas de los conceptos.
+    if (enPie) {
+      for (const pct of line.matchAll(/(\d{1,2}[.,]\d{2})%/g)) {
+        out.porcentajes_torta.push(parseFloat(pct[1].replace(',', '.')));
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Vuelca una continuación sobre el recibo anterior. NO suma: una continuación es la
+ * segunda hoja del MISMO recibo, así que sólo completa lo que falta. (Sumar es correcto
+ * para un empleado con dos recibos distintos — eso lo hace _mergePages.)
+ */
+function _mergeContinuacion(base, cont, pageNum) {
+  for (const f of ['neto', 'composicion_rem', 'composicion_no_rem', 'composicion_desc']) {
+    if (base[f] === null && cont[f] !== null) {
+      base[f] = cont[f];
+    }
+  }
+  if (!base.porcentajes_torta.length) {
+    base.porcentajes_torta.push(...cont.porcentajes_torta);
+  }
+  base.paginas.push(pageNum);
+  base.n_paginas += 1;
+}
+
 /**
  * Suma los datos de la página extra dentro de base (empleados multi-página).
  */
@@ -260,11 +339,18 @@ export function parseRecibos(pagesByFile) {
   for (const pages of pagesByFile) {
     // page_num arranca en 1 por cada archivo (igual que enumerate(pdf.pages, 1)).
     let pageNum = 0;
+    let ultimoLegajo = null;  // para atribuirle las páginas de continuación
     for (const page of pages) {
       pageNum += 1;
       const text = page || '';
       const rp = _parsePage(text, pageNum);
       if (rp === null) {
+        // Sin encabezado. Si trae los rótulos del pie del recibo, es la segunda hoja
+        // del recibo anterior: hay que volcarla, no descartarla (si se descarta se
+        // pierden el neto y los descuentos, y el validador los reporta como N/D).
+        if (ultimoLegajo !== null && _esContinuacion(text)) {
+          _mergeContinuacion(results[ultimoLegajo], _parseContinuacion(text), pageNum);
+        }
         continue;
       }
       if (Object.prototype.hasOwnProperty.call(results, rp.legajo)) {
@@ -272,6 +358,7 @@ export function parseRecibos(pagesByFile) {
       } else {
         results[rp.legajo] = rp;
       }
+      ultimoLegajo = rp.legajo;
     }
   }
 
