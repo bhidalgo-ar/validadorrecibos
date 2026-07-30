@@ -74,19 +74,28 @@ function _diff_ok(a, b, tol) {
   return Math.abs(a - b) <= tol;
 }
 
+// Tipos de hallazgo que NO invalidan el recibo: son advertencias para revisión humana.
+const _TIPOS_ADVERTENCIA = new Set(['TORTA_NO_SUMA', 'LEGAJO_DIFIERE']);
+
 function _crearResultado({
   legajo = '',
+  legajo_recibo = '',
   nombre_liqui = '',
   nombre_recibo = '',
   resultado = 'OK',
+  match_via = 'legajo',
   n_bloques_liqui = 1,
   n_paginas_recibo = 1,
 } = {}) {
   return {
     legajo,
+    // Legajo con el que figura el empleado en el recibo. Coincide con `legajo`
+    // salvo cuando el par se armó por nombre (ver _emparejar).
+    legajo_recibo: legajo_recibo || legajo,
     nombre_liqui,
     nombre_recibo,
     resultado,
+    match_via,
     hallazgos: [],
     n_bloques_liqui,
     n_paginas_recibo,
@@ -105,11 +114,13 @@ function _crearHallazgo({
   return { tipo, mensaje, codigo, descripcion, monto_liqui, monto_recibo, diferencia };
 }
 
-function _validar_empleado(liqui, recibo) {
+function _validar_empleado(liqui, recibo, match_via = 'legajo') {
   const resultado = _crearResultado({
     legajo: liqui.legajo,
+    legajo_recibo: recibo.legajo,
     nombre_liqui: liqui.nombre,
     nombre_recibo: recibo.nombre,
+    match_via,
     n_bloques_liqui: liqui.n_bloques,
     n_paginas_recibo: recibo.n_paginas,
   });
@@ -130,6 +141,19 @@ function _validar_empleado(liqui, recibo) {
     }
   }
 
+  // Lookup de la seccion patronal del recibo (lo que esta arriba del
+  // 'SUB TOTAL CONTRIBUCIONES EMPLEADOR'). Se usa solo como respaldo: hay conceptos
+  // que la liquidacion lista en la columna CONTRIBUCIONES con un codigo FUERA del
+  // rango 6050-7099 (ej. 1033 Seguro Obligatorio / SCVO) y que en el recibo aparecen
+  // en el bloque del empleador, no entre los haberes. Sin este respaldo se reportaban
+  // como CONCEPTO_FALTANTE aunque estan en el recibo con el importe correcto.
+  const recibo_contribs = {};
+  for (const c of recibo.contribuciones) {
+    if (!Object.prototype.hasOwnProperty.call(recibo_contribs, c.codigo)) {
+      recibo_contribs[c.codigo] = c;
+    }
+  }
+
   // --- 1. Verificar que cada concepto de liquidacion exista en el recibo ---
   for (const c of liqui.conceptos) {
     // Saltear conceptos del rango de contribucion (validados por total).
@@ -141,9 +165,15 @@ function _validar_empleado(liqui, recibo) {
       continue;
     }
 
-    const rc = Object.prototype.hasOwnProperty.call(recibo_conceptos, c.codigo)
+    let rc = Object.prototype.hasOwnProperty.call(recibo_conceptos, c.codigo)
       ? recibo_conceptos[c.codigo]
       : undefined;
+    let enSeccionPatronal = false;
+    if (rc === undefined &&
+        Object.prototype.hasOwnProperty.call(recibo_contribs, c.codigo)) {
+      rc = recibo_contribs[c.codigo];
+      enSeccionPatronal = true;
+    }
     if (rc === undefined) {
       hallazgos.push(_crearHallazgo({
         tipo: 'CONCEPTO_FALTANTE',
@@ -160,9 +190,10 @@ function _validar_empleado(liqui, recibo) {
       const monto_recibo_abs = Math.abs(rc.monto);
       if (!_diff_ok(c.monto, monto_recibo_abs, TOLS_CONCEPTO)) {
         const diff = _round2(c.monto - monto_recibo_abs);
+        const donde = enSeccionPatronal ? ' [en la sección del empleador del recibo]' : '';
         hallazgos.push(_crearHallazgo({
           tipo: 'MONTO_DIFIERE',
-          mensaje: `Código ${c.codigo} (${c.descripcion}): ` +
+          mensaje: `Código ${c.codigo} (${c.descripcion})${donde}: ` +
             `liquidación $${_fmt(c.monto)} ≠ recibo $${_fmt(monto_recibo_abs)} ` +
             `(dif $${_fmt(diff)})`,
           codigo: c.codigo,
@@ -250,8 +281,8 @@ function _validar_empleado(liqui, recibo) {
   }
 
   // Determinar nivel de resultado general
-  const errores = hallazgos.filter((h) => h.tipo !== 'TORTA_NO_SUMA');
-  const advertencias = hallazgos.filter((h) => h.tipo === 'TORTA_NO_SUMA');
+  const errores = hallazgos.filter((h) => !_TIPOS_ADVERTENCIA.has(h.tipo));
+  const advertencias = hallazgos.filter((h) => _TIPOS_ADVERTENCIA.has(h.tipo));
 
   if (errores.length > 0) {
     resultado.resultado = 'ERROR';
@@ -264,35 +295,155 @@ function _validar_empleado(liqui, recibo) {
   return resultado;
 }
 
-// Ordena claves replicando Python sorted() sobre strings (orden por punto de
-// codigo Unicode, ascendente). Array.prototype.sort por defecto compara strings
-// de la misma forma (lexicografico por unidades UTF-16); para los legajos
-// (digitos/ascii) coincide con el orden de Python.
-function _sortedUnion(liquidaciones, recibos) {
-  const set = new Set([...Object.keys(liquidaciones), ...Object.keys(recibos)]);
-  return Array.from(set).sort();
+// ─────────────── Emparejamiento liquidación ↔ recibo ───────────────
+// La regla principal sigue siendo el LEGAJO. Pero hay clientes donde el legajo del
+// recibo (el de la empresa de servicios eventuales que emite) no es el mismo que el de
+// la liquidación (el del padrón de la empresa usuaria). Para no dejar esos empleados
+// como SIN_PAR, cuando un legajo queda huérfano de UN SOLO lado se intenta emparejar
+// por apellido y nombre. Es un RESPALDO: nunca reemplaza ni sobrescribe un par por legajo.
+
+// Normaliza un nombre para comparar: sin tildes/diéresis, en mayúsculas, sin puntuación
+// (la coma sobra: 'APELLIDO , NOMBRE' vs 'APELLIDO, NOMBRE') y con espacios colapsados.
+// Con `ordenado`, además ordena los tokens alfabéticamente, para que 'APELLIDO NOMBRE'
+// matchee 'NOMBRE APELLIDO' (los dos formatos aparecen según la plantilla).
+export function normNombre(s, ordenado) {
+  const t = String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+  if (!t) {
+    return '';
+  }
+  return ordenado ? t.split(' ').sort().join(' ') : t;
+}
+
+// Largo mínimo del nombre normalizado para aceptar un match por prefijo. Los reportes
+// truncan el nombre a un ancho fijo (p. ej. el último nombre llega cortado), así
+// que el prefijo es necesario; el mínimo evita emparejar por un apellido corto suelto.
+const _MIN_PREFIJO = 12;
+
+// Indexa legajos por nombre normalizado. Sólo devuelve las claves con UN candidato:
+// un nombre repetido (homónimos) es ambiguo y en payroll no se adivina.
+function _indexUnico(legajos, mapa, ordenado) {
+  const porNombre = new Map();
+  for (const legajo of legajos) {
+    const k = normNombre(mapa[legajo] && mapa[legajo].nombre, ordenado);
+    if (!k) {
+      continue;
+    }
+    if (porNombre.has(k)) {
+      porNombre.set(k, null); // marcar ambiguo
+    } else {
+      porNombre.set(k, legajo);
+    }
+  }
+  for (const [k, v] of porNombre) {
+    if (v === null) {
+      porNombre.delete(k);
+    }
+  }
+  return porNombre;
+}
+
+/**
+ * Arma los pares liquidación↔recibo.
+ * @returns {{pares: Array<{legajoLiqui:string, legajoRecibo:string, via:string}>,
+ *            liquiSolo: string[], recibosSolo: string[]}}
+ */
+function _emparejar(liquidaciones, recibos) {
+  const pares = [];
+  const liquiLibres = [];
+  const recibosLibres = new Set(Object.keys(recibos));
+
+  // --- 1. Por legajo (regla principal) ---
+  for (const legajo of Object.keys(liquidaciones)) {
+    if (recibosLibres.has(legajo)) {
+      pares.push({ legajoLiqui: legajo, legajoRecibo: legajo, via: 'legajo' });
+      recibosLibres.delete(legajo);
+    } else {
+      liquiLibres.push(legajo);
+    }
+  }
+
+  // --- 2. Por nombre normalizado exacto (tokens ordenados) ---
+  const tomarPorNombre = (ordenado) => {
+    if (!liquiLibres.length || !recibosLibres.size) {
+      return;
+    }
+    const idxLiqui = _indexUnico(liquiLibres, liquidaciones, ordenado);
+    const idxRecibo = _indexUnico(Array.from(recibosLibres), recibos, ordenado);
+    for (const [k, legajoLiqui] of idxLiqui) {
+      const legajoRecibo = idxRecibo.get(k);
+      if (legajoRecibo === undefined || !recibosLibres.has(legajoRecibo)) {
+        continue;
+      }
+      pares.push({ legajoLiqui, legajoRecibo, via: 'nombre' });
+      recibosLibres.delete(legajoRecibo);
+      liquiLibres.splice(liquiLibres.indexOf(legajoLiqui), 1);
+    }
+  };
+  tomarPorNombre(true);
+
+  // --- 3. Por prefijo (nombres truncados por el ERP) ---
+  // Sólo se acepta si el candidato es único en AMBAS direcciones.
+  if (liquiLibres.length && recibosLibres.size) {
+    const recLista = Array.from(recibosLibres).map((legajo) => ({
+      legajo,
+      n: normNombre(recibos[legajo] && recibos[legajo].nombre, false),
+    })).filter((x) => x.n.length >= _MIN_PREFIJO);
+
+    const candidatos = new Map();  // legajoLiqui -> legajoRecibo (o null si ambiguo)
+    const usos = new Map();        // legajoRecibo -> cuántos liqui lo eligieron
+    for (const legajoLiqui of liquiLibres) {
+      const nl = normNombre(liquidaciones[legajoLiqui].nombre, false);
+      if (nl.length < _MIN_PREFIJO) {
+        continue;
+      }
+      const hits = recLista.filter((r) => r.n.startsWith(nl) || nl.startsWith(r.n));
+      if (hits.length !== 1) {
+        continue; // 0 candidatos, o ambiguo
+      }
+      candidatos.set(legajoLiqui, hits[0].legajo);
+      usos.set(hits[0].legajo, (usos.get(hits[0].legajo) || 0) + 1);
+    }
+    for (const [legajoLiqui, legajoRecibo] of candidatos) {
+      if (usos.get(legajoRecibo) !== 1) {
+        continue; // dos liquidaciones apuntan al mismo recibo -> ambiguo
+      }
+      pares.push({ legajoLiqui, legajoRecibo, via: 'nombre-prefijo' });
+      recibosLibres.delete(legajoRecibo);
+      liquiLibres.splice(liquiLibres.indexOf(legajoLiqui), 1);
+    }
+  }
+
+  return { pares, liquiSolo: liquiLibres, recibosSolo: Array.from(recibosLibres) };
 }
 
 export function validar(liquidaciones, recibos) {
   // Ejecuta la validacion completa. Devuelve el objeto reporte listo para serializar.
+  const { pares, liquiSolo, recibosSolo } = _emparejar(liquidaciones, recibos);
+
+  // Filas ordenadas por legajo (el de liquidacion cuando hay par). Replica el orden
+  // lexicografico de Python sorted() sobre strings, igual que la version anterior.
+  const filas = [
+    ...pares.map((p) => ({ orden: p.legajoLiqui, par: p })),
+    ...liquiSolo.map((l) => ({ orden: l, soloLiqui: l })),
+    ...recibosSolo.map((r) => ({ orden: r, soloRecibo: r })),
+  ];
+  filas.sort((a, b) => (a.orden < b.orden ? -1 : a.orden > b.orden ? 1 : 0));
+
   const resultados = [];
-
-  const all_legajos = _sortedUnion(liquidaciones, recibos);
-
-  for (const legajo of all_legajos) {
-    const liqui = Object.prototype.hasOwnProperty.call(liquidaciones, legajo)
-      ? liquidaciones[legajo]
-      : undefined;
-    const recibo = Object.prototype.hasOwnProperty.call(recibos, legajo)
-      ? recibos[legajo]
-      : undefined;
-
-    if (liqui === undefined || liqui === null) {
+  for (const fila of filas) {
+    if (fila.soloRecibo !== undefined) {
       // Recibo sin par en liquidacion
+      const legajo = fila.soloRecibo;
+      const recibo = recibos[legajo];
       const r = _crearResultado({
         legajo,
         nombre_recibo: recibo ? recibo.nombre : '',
         resultado: 'SIN_PAR',
+        match_via: '',
       });
       r.hallazgos.push(_crearHallazgo({
         tipo: 'LEGAJO_SIN_PAR',
@@ -302,11 +453,13 @@ export function validar(liquidaciones, recibos) {
       continue;
     }
 
-    if (recibo === undefined || recibo === null) {
+    if (fila.soloLiqui !== undefined) {
+      const legajo = fila.soloLiqui;
       const r = _crearResultado({
         legajo,
-        nombre_liqui: liqui.nombre,
+        nombre_liqui: liquidaciones[legajo].nombre,
         resultado: 'SIN_PAR',
+        match_via: '',
       });
       r.hallazgos.push(_crearHallazgo({
         tipo: 'LEGAJO_SIN_PAR',
@@ -316,7 +469,24 @@ export function validar(liquidaciones, recibos) {
       continue;
     }
 
-    const r = _validar_empleado(liqui, recibo);
+    const { legajoLiqui, legajoRecibo, via } = fila.par;
+    const r = _validar_empleado(liquidaciones[legajoLiqui], recibos[legajoRecibo], via);
+    if (via !== 'legajo') {
+      // Emparejado por nombre: se deja constancia como ADVERTENCIA para que quede a
+      // la vista que el legajo no coincide y que el par lo decidio la herramienta.
+      r.hallazgos.push(_crearHallazgo({
+        tipo: 'LEGAJO_DIFIERE',
+        mensaje: `Emparejado por apellido y nombre: legajo ${legajoLiqui} en liquidación ` +
+          `("${liquidaciones[legajoLiqui].nombre}") = legajo ${legajoRecibo} en el recibo ` +
+          `("${recibos[legajoRecibo].nombre}")` +
+          `${via === 'nombre-prefijo' ? ' — el nombre coincide por prefijo (aparece truncado)' : ''}. ` +
+          `Verificar que sea la misma persona.`,
+      }));
+      // Recalcular el nivel: LEGAJO_DIFIERE es advertencia, no error.
+      if (r.resultado === 'OK') {
+        r.resultado = 'ADVERTENCIA';
+      }
+    }
     resultados.push(r);
   }
 
@@ -346,9 +516,11 @@ export function validar(liquidaciones, recibos) {
 function _resultado_to_dict(r) {
   return {
     legajo: r.legajo,
+    legajo_recibo: r.legajo_recibo,
     nombre_liqui: r.nombre_liqui,
     nombre_recibo: r.nombre_recibo,
     resultado: r.resultado,
+    match_via: r.match_via,
     n_bloques_liqui: r.n_bloques_liqui,
     n_paginas_recibo: r.n_paginas_recibo,
     hallazgos: r.hallazgos.map((h) => ({

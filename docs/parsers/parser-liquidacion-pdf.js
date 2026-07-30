@@ -46,6 +46,11 @@ const _TOTAL_DESC_RE    = /Total Descuentos:\s*([\d.,]+)/;
 const _TOTAL_NETOS_RE   = /Total Netos:\s*([\d.,]+)/;
 // Costo Laboral = Total Contribuciones (confiable, sin el bug de merge de pdfplumber)
 const _COSTO_LABORAL_RE = /Costo Laboral:\s*([\d.,]+)/;
+// Fuente alternativa del total de contribuciones: no todas las plantillas Meta 4 imprimen
+// el rótulo 'Costo Laboral:'; algunas sólo traen 'Total Contribuciones:'. Sin este fallback
+// total_contrib quedaba en null y el validador reportaba "Total Contribuciones ... (uno es N/D)"
+// para TODOS los empleados. Cuando ambos rótulos están, gana 'Costo Laboral:'.
+const _TOTAL_CONTRIB_RE = /Total Contribuciones:\s*([\d.,]+)/;
 
 // Equivalente a Python str.lstrip('0') con fallback a '0'.
 function _lstripZeros(s) {
@@ -118,8 +123,10 @@ function _flushEmployee(current, results) {
 }
 
 // Parsea el texto de una página, acumulando bloques de empleado en results.
-// currentHolder es un array de un solo elemento (mutable) para mantener estado
-// entre líneas/páginas, replicando la `list` mutable del Python.
+// currentHolder es un array mutable que mantiene estado entre líneas/páginas:
+//   [0] = empleado en curso (o null)
+//   [1] = true si ya se leyó alguna línea de totales del bloque en curso
+//   [2] = true si total_contrib vino de 'Costo Laboral:' (fuente autoritativa)
 function _parseText(text, results, currentHolder) {
   for (let line of text.split('\n')) {
     line = line.trim();
@@ -137,6 +144,8 @@ function _parseText(text, results, currentHolder) {
       // Python: m.group(2).strip().rstrip(',').strip()
       const nombre = m[2].trim().replace(/,+$/, '').trim();
       currentHolder[0] = _nuevoEmpleado(legajo, nombre);
+      currentHolder[1] = false;
+      currentHolder[2] = false;
       continue;
     }
 
@@ -167,18 +176,44 @@ function _parseText(text, results, currentHolder) {
       if (mNet) {
         emp.neto = parseMoney(mNet[1]);
       }
+      currentHolder[1] = true;
       continue;
     }
 
     const mCl = _COSTO_LABORAL_RE.exec(line);
     if (mCl) {
       emp.total_contrib = parseMoney(mCl[1]);
+      currentHolder[1] = true;
+      currentHolder[2] = true;
+      continue;
+    }
+
+    const mTc = _TOTAL_CONTRIB_RE.exec(line);
+    if (mTc) {
+      // Sólo si 'Costo Laboral:' no lo definió: ese rótulo es el autoritativo.
+      if (!currentHolder[2]) {
+        emp.total_contrib = parseMoney(mTc[1]);
+      }
+      currentHolder[1] = true;
       continue;
     }
 
     // --- Línea de concepto ---
     const mC = _CONCEPTO_RE.exec(line);
     if (mC) {
+      // Un concepto DESPUÉS de los totales del bloque significa que el bloque del
+      // empleado ya terminó: el reporte Meta 4 cierra cada empleado con sus totales.
+      // Lo que sigue es la página de TOTALES GENERALES de la empresa (misma grilla de
+      // conceptos, sin línea 'Legajo:'), que no pertenece a ningún empleado. Si no se
+      // cerrara acá, esos importes acumulados de toda la empresa se sumaban al último
+      // empleado del reporte y lo dejaban con un bruto/neto absurdo.
+      if (currentHolder[1]) {
+        _flushEmployee(emp, results);
+        currentHolder[0] = null;
+        currentHolder[1] = false;
+        currentHolder[2] = false;
+        continue;
+      }
       const code = _lstripMinus(mC[1]);  // quitar el signo del código para el lookup
       const desc = mC[2].trim();
       const amountStr = mC[3];
@@ -265,10 +300,13 @@ function _round2(x) {
 // Devuelve un objeto-mapa { [legajo]: LiquidacionEmpleado } ya consolidado.
 export function parseLiquidacionPdf(pagesByFile) {
   const raw = {};
-  const currentHolder = [null];  // mantiene estado entre páginas de la misma parte
+  const currentHolder = [null, false, false];  // estado entre páginas de la misma parte
 
   for (const pages of pagesByFile) {
-    currentHolder[0] = null;  // reset entre partes (cada parte es independiente)
+    // reset entre partes (cada parte es independiente)
+    currentHolder[0] = null;
+    currentHolder[1] = false;
+    currentHolder[2] = false;
     for (const page of pages) {
       const text = page || '';
       _parseText(text, raw, currentHolder);

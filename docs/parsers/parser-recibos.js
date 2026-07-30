@@ -110,8 +110,12 @@ function _parsePage(text, pageNum) {
 
     // --- HEADER: busca legajo + nombre + bruto ---
     if (state === 'HEADER') {
+      // El legajo no tiene largo fijo: hay clientes con 3-4 dígitos y otros con
+      // legajos largos (7+, ej. los del padrón de la empresa usuaria). Acotarlo a
+      // 6 dígitos hacía que el header NO matcheara y la página entera se descartara
+      // por "no se detectó legajo" -> el recibo quedaba SIN_PAR contra la liquidación.
       const reHeader = new RegExp(
-        MESES + '\\s+\\d{4}\\s+(.+?)\\s+(\\d{3,6})\\s+\\$\\s*([\\d.,]+)'
+        MESES + '\\s+\\d{4}\\s+(.+?)\\s+(\\d{3,12})\\s+\\$\\s*([\\d.,]+)'
       );
       const m = line.match(reHeader);
       if (m) {
@@ -195,9 +199,11 @@ function _parsePage(text, pageNum) {
 
     // --- Porcentajes del gráfico de torta ---
     if (state === 'PIE') {
-      const matches = line.matchAll(/(\d{1,2}\.\d{2})%/g);
+      // El separador decimal del porcentaje varía según la plantilla del recibo:
+      // '1.27%' (US) o '1,27%' (AR). Aceptamos ambos y normalizamos a punto.
+      const matches = line.matchAll(/(\d{1,2}[.,]\d{2})%/g);
       for (const pct of matches) {
-        rp.porcentajes_torta.push(parseFloat(pct[1]));
+        rp.porcentajes_torta.push(parseFloat(pct[1].replace(',', '.')));
       }
     }
   }
