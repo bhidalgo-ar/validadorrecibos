@@ -143,6 +143,17 @@ la versión JS. La versión canónica es la de `docs/` (JavaScript).
   que incluyen provisiones con códigos fuera de ese rango).
 - **Conceptos internos** (provisiones/reversiones, mínimos no imponibles, valor del plan): no
   se exigen en el recibo.
+- **Conceptos a cargo del empleador tampoco se exigen** (decidido 2026-07-30). Cuando la
+  descripción de la liquidación dice explícitamente **`a c/empresa`** (o `a cargo de la empresa`)
+  el concepto es costo de la empresa, no un concepto del trabajador: el recibo no lo muestra ni
+  en haberes ni en la sección patronal, y **tampoco integra el `Total Contribuciones`** (verificado:
+  la suma de las contribuciones cierra exacta sin él). Exigirlo producía un `CONCEPTO_FALTANTE`
+  sistémico — en el lote que lo destapó, 70 de 72 empleados. El filtro es `_A_CARGO_EMPRESA_RE`
+  en `isInternal` (`parsers/liquidacion-pdf`).
+  **Se distingue por el marcador, NO por el nombre del concepto:** hay plantillas con un
+  `Diferencia Plan` / `Diferencia plan prepaga` que **sí** figura en los haberes del recibo y debe
+  seguir exigiéndose; sin el `a c/empresa` no entra por esta regla. En la ruta **Excel** no hace
+  falta: esos conceptos caen a la derecha del NETO y ya se saltean por `columna='CONTRIB'`.
 - **Totales validados:** Neto, Bruto, Descuentos, Contribuciones, Costo Laboral (= Bruto +
   Contribuciones del recibo).
 - **Tolerancias:** ±$0,01 por concepto, ±$1,00 por total, ±1 punto para la suma de la torta.
@@ -197,13 +208,19 @@ CUALQUIER cliente con esa variante, no sólo a ese lote:
    (`_mergeContinuacion`), mientras que un segundo recibo del mismo legajo **suma**
    (`_mergePages`) — son casos distintos y no hay que confundirlos.
 
-**Impacto sobre el golden:** los cuatro son aditivos/fallbacks y no deberían moverlo (el formato
-Marval sigue por la misma rama). Las dos excepciones posibles, **a confirmar corriendo
-`/verify-golden` en una máquina con los PDF**: si el PDF de Marval también termina con página de
-totales generales, su último empleado estaba corrupto y ahora pasa a estar bien (un ERROR menos);
-y si alguno de los 13 errores era un `CONCEPTO_FALTANTE` de un concepto que sí estaba en la
-sección patronal del recibo, ahora se resuelve. Ambos casos serían **mejoras**: si el conteo baja,
-verificar que sea por uno de esos dos motivos y actualizar el golden en el mismo commit.
+**Impacto sobre el golden — `/verify-golden` SIGUE PENDIENTE.** No se pudo correr al hacer estos
+cambios (los PDF golden no estaban en la máquina). Se hizo en cambio una **regresión viejo-vs-nuevo**
+(el código anterior contra el nuevo sobre entradas con forma Marval): salida **idéntica** en recibo
+con legajo de 4 dígitos y torta con punto, en recibo multi-página, en liquidación sin página de
+totales y en el reporte end-to-end. Los cambios son fallbacks/aditivos, así que el 531/518/13
+debería mantenerse. Hay **tres** vías por las que igual podría bajar el conteo, todas **mejoras**
+(si baja, confirmar que sea por una de estas y actualizar el golden en el mismo commit):
+1. si el PDF de Marval también termina con página de totales generales, su último empleado estaba
+   corrupto y ahora pasa a estar bien;
+2. si alguno de los 13 errores era un `CONCEPTO_FALTANTE` de un concepto que sí estaba en la
+   sección patronal del recibo;
+3. si la liquidación de Marval tiene algún concepto con `a c/empresa` en la descripción, que ahora
+   ya no se exige.
 
 ### Casos conocidos a revisar manualmente
 - **Legajo 7269 (ALONSO FERRANTE):** la liquidación de ese empleado parsea a valores absurdos

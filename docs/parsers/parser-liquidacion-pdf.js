@@ -25,6 +25,18 @@ const PROVISION_KEYWORDS = [
   'rev. prov', 'rever.', 'bonus prov', 'prov ccss',
 ];
 
+// Conceptos que la liquidación marca explícitamente como COSTO DEL EMPLEADOR
+// ("Dif plan prepaga a c/empresa <prepaga>"). Son costo de la empresa, no un concepto del
+// trabajador: el recibo del trabajador no los muestra ni en haberes ni en la sección
+// patronal, y tampoco integran el Total Contribuciones (verificado: la suma de las
+// contribuciones cierra exacta sin ellos). Exigirlos generaba un CONCEPTO_FALTANTE en
+// casi todos los empleados del lote.
+//
+// Se distinguen por el marcador explícito, NO por el nombre del concepto: hay plantillas
+// con un "Diferencia Plan" / "Diferencia plan prepaga" que SÍ figura en los haberes del
+// recibo y debe seguir exigiéndose. Sin el "a c/empresa" no entra por acá.
+const _A_CARGO_EMPRESA_RE = /\bc\/\s*empresa\b|\ba\s+cargo\s+de\s+la\s+empresa\b/i;
+
 // Línea de concepto: CODE [espacio] descripción [unidad opcional como "11,00"] monto
 // pdfplumber a veces pega code+descripción sin espacio (ej. "3025Comp. gastos").
 // Python: re.compile(r'^(-?\d{3,6})\s*(.+?)\s+(?:\d{1,4},\d{2}\s+)?(-?(?:\d{1,3}\.)*\d{1,3},\d{2})\s*$')
@@ -81,6 +93,9 @@ function _nuevoEmpleado(legajo, nombre) {
 
 export function isInternal(codigo, descripcion) {
   if (INTERNAL_CODES.has(_lstripMinus(codigo))) {
+    return true;
+  }
+  if (_A_CARGO_EMPRESA_RE.test(descripcion)) {
     return true;
   }
   const descLower = descripcion.toLowerCase();
