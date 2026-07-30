@@ -133,10 +133,18 @@ la versión JS. La versión canónica es la de `docs/` (JavaScript).
      que un lado puede venir cortado.
   Reglas duras del respaldo: **nunca** sobrescribe un par armado por legajo, y **sólo** empareja
   candidatos **únicos en ambas direcciones** — con homónimos o cualquier ambigüedad los deja
-  `SIN_PAR` (en payroll no se adivina). Todo par armado así queda marcado con el hallazgo
-  `LEGAJO_DIFIERE`, que es **advertencia** (no error): la fila muestra los dos legajos y pide
-  confirmación humana de que es la misma persona. El campo `legajo_recibo` del reporte lleva el
-  legajo del recibo (igual a `legajo` cuando el par fue por legajo).
+  `SIN_PAR` (en payroll no se adivina). El campo `legajo_recibo` del reporte lleva el legajo del
+  recibo (igual a `legajo` cuando el par fue por legajo) y la fila muestra los dos.
+- **Cómo se avisa el legajo distinto: por lote o por fila, según sea la regla o la excepción**
+  (decidido 2026-07-30). Si **todos** los pares se armaron por nombre, el legajo distinto no es
+  una anomalía por empleado sino **un solo hecho del lote** (la liquidación usa el padrón de la
+  empresa usuaria y el recibo el de la empresa de servicios eventuales): se informa **una vez**
+  en el veredicto (`resumen.emparejamiento.todos_por_nombre` → `.v-nota` en la UI) y las filas
+  quedan `OK`. Marcarlo 72 veces convertía la columna de advertencias en ruido y tapaba lo que sí
+  es excepcional. Si el emparejamiento por nombre afecta **sólo a una parte** del lote, ahí sí es
+  raro y cada fila lleva el hallazgo `LEGAJO_DIFIERE` (**advertencia**, no error) para revisión
+  individual. En los dos casos el legajo del recibo queda visible en la fila con el prefijo `rec.`;
+  la confirmación de que es la misma persona siempre es humana.
 - **Comparación por valor absoluto** del monto (el recibo muestra descuentos en negativo).
 - **Contribuciones:** sólo por total, no línea por línea. Se saltean los códigos del rango
   6050–7099 y los marcados `columna='CONTRIB'` (el Excel marca así las de la derecha del NETO,

@@ -431,6 +431,16 @@ export function validar(liquidaciones, recibos) {
   // Ejecuta la validacion completa. Devuelve el objeto reporte listo para serializar.
   const { pares, liquiSolo, recibosSolo } = _emparejar(liquidaciones, recibos);
 
+  // Cuando TODOS los pares se armaron por nombre, el legajo distinto no es una anomalia
+  // por empleado: es UN solo hecho del lote (la liquidacion usa el padron de la empresa
+  // usuaria y el recibo el de la empresa de servicios eventuales). Marcarlo fila por fila
+  // convierte la columna de advertencias en ruido y tapa lo que si es excepcional, asi que
+  // se informa una vez en el resumen (`emparejamiento`) y la fila solo muestra los dos
+  // legajos. Si el emparejamiento por nombre afecta a UNA PARTE del lote, ahi si es raro
+  // y cada fila se marca con LEGAJO_DIFIERE para que se revise individualmente.
+  const nPorNombre = pares.filter((p) => p.via !== 'legajo').length;
+  const _todosPorNombre = pares.length > 0 && nPorNombre === pares.length;
+
   // Filas ordenadas por legajo (el de liquidacion cuando hay par). Replica el orden
   // lexicografico de Python sorted() sobre strings, igual que la version anterior.
   const filas = [
@@ -478,7 +488,7 @@ export function validar(liquidaciones, recibos) {
 
     const { legajoLiqui, legajoRecibo, via } = fila.par;
     const r = _validar_empleado(liquidaciones[legajoLiqui], recibos[legajoRecibo], via);
-    if (via !== 'legajo') {
+    if (via !== 'legajo' && !_todosPorNombre) {
       // Emparejado por nombre: se deja constancia como ADVERTENCIA para que quede a
       // la vista que el legajo no coincide y que el par lo decidio la herramienta.
       r.hallazgos.push(_crearHallazgo({
@@ -513,6 +523,14 @@ export function validar(liquidaciones, recibos) {
       errores: n_error,
       advertencias: n_adv,
       sin_par: n_sin_par,
+      // Como se armaron los pares. `todos_por_nombre` significa que NINGUN par salio por
+      // legajo: el lote entero usa numeraciones distintas entre liquidacion y recibo. En ese
+      // caso no se marca fila por fila (ver comentario en validar) y la UI lo avisa una vez.
+      emparejamiento: {
+        por_legajo: pares.length - nPorNombre,
+        por_nombre: nPorNombre,
+        todos_por_nombre: _todosPorNombre,
+      },
     },
     empleados: resultados.map((r) => _resultado_to_dict(r)),
   };

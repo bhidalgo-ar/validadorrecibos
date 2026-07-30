@@ -699,7 +699,18 @@ function renderVerdict() {
   }
   el.className = 'verdict ' + cls;
   el.innerHTML = `<span class="v-ico">${ico}</span>
-    <div class="v-txt"><div class="v-title">${title}</div><div class="v-sub">${sub}</div></div>`;
+    <div class="v-txt"><div class="v-title">${title}</div><div class="v-sub">${sub}</div>${legajoNota(r)}</div>`;
+}
+
+// Aviso de LOTE: cuando todos los pares se armaron por apellido y nombre, el legajo distinto
+// es un solo hecho del lote y no una anomalía por empleado (ver validador). Se informa acá una
+// vez, en vez de marcar las N filas; el legajo del recibo igual queda visible en cada fila.
+function legajoNota(r) {
+  const e = r.emparejamiento;
+  if (!e || !e.todos_por_nombre) return '';
+  return `<div class="v-nota">Los <b>${e.por_nombre}</b> recibos se emparejaron por <b>apellido y nombre</b>:
+    la liquidación y los recibos usan numeraciones de legajo distintas. Cada fila muestra los dos
+    legajos (el del recibo con el prefijo <b>rec.</b>) para que puedas confirmar que es la misma persona.</div>`;
 }
 
 function renderContext() {

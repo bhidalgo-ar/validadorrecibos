@@ -425,6 +425,10 @@ body {
 .verdict .v-title { font-family: var(--serif); font-weight: 400; font-size: 1.5rem; line-height: 1.05; color: var(--ink); letter-spacing: -0.01em; }
 .verdict .v-title b { font-family: var(--font); font-weight: 800; }
 .verdict .v-sub { font-size: 0.86rem; color: var(--t2); margin-top: 4px; }
+/* Aviso de lote (p. ej. emparejamiento por nombre): dato del lote, no un hallazgo por fila */
+.verdict .v-nota { font-size: 0.82rem; color: var(--t2); margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--line); line-height: 1.5; }
+.verdict .v-nota b { color: var(--t1); }
 .verdict.v-error { background: var(--error-bg); border-color: var(--error-bd); }
 .verdict.v-error .v-ico { background: var(--error); color: #fff; }
 .verdict.v-error .v-title b { color: var(--error-tx); }
