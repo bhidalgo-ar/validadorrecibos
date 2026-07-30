@@ -116,6 +116,27 @@ la versión JS. La versión canónica es la de `docs/` (JavaScript).
   liquidación debe estar en el recibo con el mismo importe. (Si está en el recibo y no en la
   liquidación: advertencia, no error.)
 - **Match por código** de concepto (3-6 dígitos). Nunca por nombre (difieren entre liq y recibo).
+  El concepto se busca primero entre los **haberes** del recibo y, si no está, en la **sección
+  patronal** (arriba del `SUB TOTAL CONTRIBUCIONES EMPLEADOR`). Hace falta porque hay conceptos
+  que la liquidación lista en la columna CONTRIBUCIONES con un código **fuera** del rango
+  6050–7099 (p. ej. el seguro de vida obligatorio, cód. 1033) y que en el recibo figuran en el
+  bloque del empleador: sin ese respaldo se reportaban como `CONCEPTO_FALTANTE` estando presentes.
+- **Emparejamiento empleado↔recibo: por legajo, con respaldo por apellido y nombre.** El legajo
+  sigue siendo la regla principal. Pero hay clientes donde el legajo del **recibo** (el de la
+  empresa de servicios eventuales que emite) no es el mismo que el de la **liquidación** (el del
+  padrón de la empresa usuaria). Cuando un legajo queda huérfano de un solo lado se intenta
+  emparejar por nombre, en dos pasadas (`_emparejar` en `core/validador.js`):
+  1. **nombre normalizado exacto** — sin tildes, en mayúsculas, sin puntuación (`'X , Y'` =
+     `'X, Y'`) y con los tokens ordenados alfabéticamente, así `APELLIDO NOMBRE` matchea
+     `NOMBRE APELLIDO`;
+  2. **por prefijo** (mín. 12 caracteres) — los reportes truncan el nombre a un ancho fijo, así
+     que un lado puede venir cortado.
+  Reglas duras del respaldo: **nunca** sobrescribe un par armado por legajo, y **sólo** empareja
+  candidatos **únicos en ambas direcciones** — con homónimos o cualquier ambigüedad los deja
+  `SIN_PAR` (en payroll no se adivina). Todo par armado así queda marcado con el hallazgo
+  `LEGAJO_DIFIERE`, que es **advertencia** (no error): la fila muestra los dos legajos y pide
+  confirmación humana de que es la misma persona. El campo `legajo_recibo` del reporte lleva el
+  legajo del recibo (igual a `legajo` cuando el par fue por legajo).
 - **Comparación por valor absoluto** del monto (el recibo muestra descuentos en negativo).
 - **Contribuciones:** sólo por total, no línea por línea. Se saltean los códigos del rango
   6050–7099 y los marcados `columna='CONTRIB'` (el Excel marca así las de la derecha del NETO,
@@ -144,6 +165,36 @@ La versión JS reproduce esos números **exactamente** (verificado en Node y en 
 **Única diferencia (mejora):** legajo 6851 (DONATI) — pdf.js lee la torta completa (suma 100%)
 donde pdfplumber se comía una porción (daba 85,76% → falso `TORTA_NO_SUMA`). El JS elimina ese
 falso positivo. Sigue marcado ERROR por una diferencia real (Bruto−Desc ≠ Neto impreso).
+
+### Variantes de formato Meta 4 soportadas (julio 2026)
+
+Un segundo cliente (liquidado también con Meta 4, pero con otra plantilla) destapó cuatro
+supuestos que estaban de más en los parsers. Los cuatro se corrigieron; los cuatro afectaban a
+CUALQUIER cliente con esa variante, no sólo a ese lote:
+
+1. **Legajos de más de 6 dígitos.** El header del recibo se matcheaba con `\d{3,6}`: con legajos
+   de 7 dígitos el header no matcheaba, la página se descartaba por "no se detectó legajo" y el
+   recibo entero desaparecía → **todos** los empleados salían `SIN_PAR`. Ahora `\d{3,12}`.
+2. **Página de TOTALES GENERALES de la empresa.** El reporte cierra con una página que repite la
+   grilla de conceptos con los acumulados de toda la empresa y **sin** línea `Legajo:`. Esos
+   importes se le sumaban al último empleado del reporte y lo dejaban con un bruto/neto absurdo.
+   Ahora el bloque del empleado se **cierra** al aparecer un concepto después de sus totales
+   (Meta 4 siempre termina cada empleado con sus totales), así que la página de totales no se
+   imputa a nadie.
+3. **`Total Contribuciones:` como fuente alternativa.** No todas las plantillas imprimen el
+   rótulo `Costo Laboral:`; sin fallback `total_contrib` quedaba `null` y el validador reportaba
+   `Total Contribuciones … (uno es N/D)` para **todos** los empleados. Cuando están los dos
+   rótulos, gana `Costo Laboral:` (comportamiento previo intacto).
+4. **Porcentajes de la torta con coma decimal.** Se leían sólo como `1.27%`; con `1,27%` la lista
+   quedaba vacía y la validación de la torta no corría (columna en `—`). Ahora acepta ambos.
+
+**Impacto sobre el golden:** los cuatro son aditivos/fallbacks y no deberían moverlo (el formato
+Marval sigue por la misma rama). Las dos excepciones posibles, **a confirmar corriendo
+`/verify-golden` en una máquina con los PDF**: si el PDF de Marval también termina con página de
+totales generales, su último empleado estaba corrupto y ahora pasa a estar bien (un ERROR menos);
+y si alguno de los 13 errores era un `CONCEPTO_FALTANTE` de un concepto que sí estaba en la
+sección patronal del recibo, ahora se resuelve. Ambos casos serían **mejoras**: si el conteo baja,
+verificar que sea por uno de esos dos motivos y actualizar el golden en el mismo commit.
 
 ### Casos conocidos a revisar manualmente
 - **Legajo 7269 (ALONSO FERRANTE):** la liquidación de ese empleado parsea a valores absurdos

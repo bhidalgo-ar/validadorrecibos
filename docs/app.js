@@ -563,7 +563,8 @@ function mergeEmpleado(a, b) {
 // Enriquece cada empleado con datos del recibo para mostrar en la tabla.
 function enrich(reporte, liqui, recibos) {
   for (const emp of reporte.empleados) {
-    const r = recibos[emp.legajo];
+    // Ojo: cuando el par se armó por apellido y nombre, el recibo está bajo OTRO legajo.
+    const r = recibos[emp.legajo_recibo || emp.legajo];
     emp.nombre = emp.nombre_liqui || emp.nombre_recibo || '';
     if (r) {
       emp.bruto = r.bruto; emp.neto = r.neto;
@@ -595,15 +596,23 @@ const SC_MAP = { OK: 'ok', ERROR: 'error', ADVERTENCIA: 'warn', SIN_PAR: 'sinpar
 const SL_MAP = { OK: '✓ OK', ERROR: '✕ Error', ADVERTENCIA: '⚠ Advertencia', SIN_PAR: '? Sin par' };
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Cuando el par se armó por apellido y nombre, el legajo del recibo no es el de la
+// liquidación: se muestran los dos para que la revisión no dependa de abrir el detalle.
+function legAlt(e) {
+  if (!e.legajo_recibo || e.legajo_recibo === e.legajo) return '';
+  return `<span class="leg-alt" title="Legajo con el que figura en el recibo (emparejado por apellido y nombre)">rec. ${esc(e.legajo_recibo)}</span>`;
+}
+
 // Metadatos por tipo de hallazgo: etiqueta para chips, etiqueta corta para la fila,
 // y severidad (color). El orden del array fija el orden de los chips.
-const TIPO_ORDER = ['MONTO_DIFIERE', 'TOTAL_DIFIERE', 'CONCEPTO_FALTANTE', 'CONCEPTO_DUPLICADO', 'TORTA_NO_SUMA', 'LEGAJO_SIN_PAR'];
+const TIPO_ORDER = ['MONTO_DIFIERE', 'TOTAL_DIFIERE', 'CONCEPTO_FALTANTE', 'CONCEPTO_DUPLICADO', 'TORTA_NO_SUMA', 'LEGAJO_DIFIERE', 'LEGAJO_SIN_PAR'];
 const TIPO_META = {
   MONTO_DIFIERE: { label: 'monto difiere', short: 'monto', sev: 'error' },
   TOTAL_DIFIERE: { label: 'total difiere', short: 'total', sev: 'error' },
   CONCEPTO_FALTANTE: { label: 'concepto faltante', short: 'falta concepto', sev: 'error' },
   CONCEPTO_DUPLICADO: { label: 'concepto duplicado', short: 'duplicado', sev: 'error' },
   TORTA_NO_SUMA: { label: 'torta no suma', short: 'torta', sev: 'warn' },
+  LEGAJO_DIFIERE: { label: 'legajo difiere', short: 'legajo difiere', sev: 'warn' },
   LEGAJO_SIN_PAR: { label: 'sin par', short: 'sin par', sev: 'neutral' },
 };
 
@@ -816,7 +825,10 @@ function visible() {
     if (F !== 'all' && e.resultado !== F) return false;
     if (FT && !(e.hallazgos || []).some((h) => h.tipo === FT)) return false;
     if (FC && !(e.hallazgos || []).some((h) => String(h.codigo) === String(FC))) return false;
-    if (q && !e.nombre.toLowerCase().includes(q) && !e.legajo.includes(q)) return false;
+    // Buscar también por el legajo del recibo: si difiere del de la liquidación, el
+    // usuario puede estar buscando con el número que tiene el recibo en la mano.
+    if (q && !e.nombre.toLowerCase().includes(q) && !e.legajo.includes(q)
+        && !String(e.legajo_recibo || '').includes(q)) return false;
     return true;
   }).sort((a, b) => {
     let av = a[SC], bv = b[SC];
@@ -852,7 +864,7 @@ function renderTable() {
     const tc = e.torta != null && Math.abs(e.torta - 100) <= 1 ? 'ok' : 'warn';
     const tags = tipoSummary(e);
     const main = `<tr class="row s-${s}${hi ? ' hi' : ''}" data-leg="${esc(e.legajo)}">
-      <td class="leg">${esc(e.legajo)}</td>
+      <td class="leg">${esc(e.legajo)}${legAlt(e)}</td>
       <td><div class="nom-wrap"><span class="nom">${esc(e.nombre)}</span>${tags ? `<div class="nom-tags">${tags}</div>` : ''}</div></td>
       <td class="r">${fARS(e.bruto)}</td>
       <td class="r">${fARS(e.neto)}</td>
@@ -913,12 +925,12 @@ ui.btnExport.addEventListener('click', () => {
   const num = (n) => (n == null ? '' : Number(n).toFixed(2).replace('.', ','));
   const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
   const cli = clientName();
-  const header = ['Cliente', 'Legajo', 'Nombre', 'Estado', 'Tipo', 'Código', 'Descripción', 'Liquidación', 'Recibo', 'Diferencia'];
+  const header = ['Cliente', 'Legajo', 'Legajo recibo', 'Nombre', 'Estado', 'Tipo', 'Código', 'Descripción', 'Liquidación', 'Recibo', 'Diferencia'];
   const lines = [header.map(q).join(';')];
   for (const e of conDif) {
     for (const h of e.hallazgos) {
       lines.push([
-        q(cli), q(e.legajo), q(e.nombre), q(e.resultado),
+        q(cli), q(e.legajo), q(e.legajo_recibo || e.legajo), q(e.nombre), q(e.resultado),
         q(h.tipo.replace(/_/g, ' ')), q(h.codigo || ''), q(h.descripcion || h.mensaje || ''),
         q(num(h.monto_liqui)), q(num(h.monto_recibo)), q(num(h.diferencia)),
       ].join(';'));
