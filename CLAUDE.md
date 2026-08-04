@@ -161,7 +161,7 @@ la versión JS. La versión canónica es la de `docs/` (JavaScript).
   Por qué el error pasó desapercibido hasta ahora: en las plantillas sin aportes a terceros los
   dos rótulos dan **idéntico** (en Marval coinciden en 541 de 542 empleados), así que tomar uno u
   otro no cambiaba nada. En el primer lote con convenio de Comercio y Camioneros la diferencia era
-  de $55.000 a $60.000 por empleado y disparaba un `TOTAL_DIFIERE` en **550 de 631** recibos, todos
+  de $55.000 a $60.000 por empleado y disparaba un `TOTAL_DIFIERE` en **548 de 631** recibos, todos
   falsos positivos.
 - **Conceptos internos** (provisiones/reversiones, mínimos no imponibles, valor del plan): no
   se exigen en el recibo. Incluye el código **5700 `Base Maternidad LSD`**: es la base que se
@@ -275,12 +275,12 @@ bajó un error respecto del golden original y fue por la "vía 1" que se había 
 Un tercer cliente (cuatro empresas del mismo grupo, todas Meta 4, convenios de **Comercio** y
 **Camioneros**) destapó cuatro problemas más. Los cuatro estaban en el motor y afectaban a
 cualquier cliente con esa variante; todos daban **falsos positivos**, nunca falsos OK. Sobre 631
-empleados de ese lote, los errores reportados pasaron de **550 a 5** (los 5 restantes son
-diferencias reales).
+empleados de ese lote se pasó de **43 OK · 551 con error · 37 sin par** a **624 OK · 7 con error ·
+0 sin par**. Los 7 que quedan son diferencias reales (ver "Casos conocidos a revisar manualmente").
 
 1. **`Costo Laboral:` no es el total de contribuciones cuando el convenio tiene aportes a
    terceros.** Ver la regla de negocio de arriba: ahora manda `Total Contribuciones:`. Era el
-   problema masivo — 550 `TOTAL_DIFIERE` de $55.000 a $60.000 por empleado.
+   problema masivo — 548 `TOTAL_DIFIERE` de $55.000 a $60.000 por empleado.
 2. **Legajos de 1 y 2 dígitos.** El header del recibo pedía `\d{3,12}`: los clientes que numeran
    desde 1 perdían la página entera por "no se detectó legajo" y esos empleados salían `SIN_PAR`
    (una empresa completa del lote, 21 de 21, más 16 empleados sueltos de las otras tres). Ahora
