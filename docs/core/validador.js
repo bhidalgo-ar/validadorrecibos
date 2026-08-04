@@ -127,18 +127,34 @@ function _validar_empleado(liqui, recibo, match_via = 'legajo') {
   const hallazgos = resultado.hallazgos;
 
   // Construir lookup de conceptos del recibo (no-contribucion) por codigo.
+  // Los conceptos ya vienen consolidados por codigo cuando el empleado tiene varios recibos en
+  // el PDF (mes + ajustes), asi que un codigo repetido NO se detecta aca: lo marca el parser
+  // por pagina, que es donde se puede distinguir un recibo mal armado de un mismo concepto que
+  // viene en dos recibos distintos. `codigos_duplicados` es esa lista.
   const recibo_conceptos = {};
+  const _dupsDelParser = Array.isArray(recibo.codigos_duplicados) ? recibo.codigos_duplicados : null;
   for (const c of recibo.conceptos) {
     if (Object.prototype.hasOwnProperty.call(recibo_conceptos, c.codigo)) {
-      hallazgos.push(_crearHallazgo({
-        tipo: 'CONCEPTO_DUPLICADO',
-        mensaje: `Recibo: código ${c.codigo} (${c.descripcion}) duplicado`,
-        codigo: c.codigo,
-        descripcion: c.descripcion,
-      }));
+      if (!_dupsDelParser) {
+        // Recibo parseado por una version anterior del parser: se mantiene la deteccion vieja.
+        hallazgos.push(_crearHallazgo({
+          tipo: 'CONCEPTO_DUPLICADO',
+          mensaje: `Recibo: código ${c.codigo} (${c.descripcion}) duplicado`,
+          codigo: c.codigo,
+          descripcion: c.descripcion,
+        }));
+      }
     } else {
       recibo_conceptos[c.codigo] = c;
     }
+  }
+  for (const d of (_dupsDelParser || [])) {
+    hallazgos.push(_crearHallazgo({
+      tipo: 'CONCEPTO_DUPLICADO',
+      mensaje: `Recibo: código ${d.codigo} (${d.descripcion}) duplicado en la misma página`,
+      codigo: d.codigo,
+      descripcion: d.descripcion,
+    }));
   }
 
   // Lookup de la seccion patronal del recibo (lo que esta arriba del
@@ -257,14 +273,23 @@ function _validar_empleado(liqui, recibo, match_via = 'legajo') {
   // el descuento cancela los haberes y solo quedan contribuciones patronales. Exigir ~100%
   // ahi es un falso positivo. Se pide que se cumplan LAS DOS condiciones (suma 0 y bruto 0)
   // para no perder el chequeo cuando el bruto es real y la torta igual da 0.
+  // Se valida CADA torta por separado: un empleado con varios recibos en el PDF (el del mes
+  // más los ajustes de meses anteriores) tiene una torta por recibo, y cada una reparte su
+  // propio 100%. Sumarlas todas juntas daba N×100% y un TORTA_NO_SUMA falso.
   const _tortaVacia = (recibo.bruto === 0 || recibo.bruto === null || recibo.bruto === undefined);
-  if (recibo.porcentajes_torta && recibo.porcentajes_torta.length > 0 &&
-      !(_tortaVacia && _round2(recibo.porcentajes_torta.reduce((a, b) => a + b, 0)) === 0)) {
-    const total_pct = _round2(recibo.porcentajes_torta.reduce((a, b) => a + b, 0));
+  const _tortas = (recibo.tortas && recibo.tortas.length)
+    ? recibo.tortas
+    : (recibo.porcentajes_torta && recibo.porcentajes_torta.length ? [recibo.porcentajes_torta] : []);
+  for (const torta of _tortas) {
+    const total_pct = _round2(torta.reduce((a, b) => a + b, 0));
+    if (_tortaVacia && total_pct === 0) {
+      continue;
+    }
     if (Math.abs(total_pct - 100.0) > TOL_TORTA) {
       hallazgos.push(_crearHallazgo({
         tipo: 'TORTA_NO_SUMA',
-        mensaje: `Gráfico de torta: suma de porcentajes = ${total_pct}% (esperado ~100%)`,
+        mensaje: `Gráfico de torta: suma de porcentajes = ${total_pct}% (esperado ~100%)` +
+          (_tortas.length > 1 ? ` — el empleado tiene ${_tortas.length} recibos, se valida cada torta por separado` : ''),
         diferencia: _round2(total_pct - 100.0),
       }));
     }

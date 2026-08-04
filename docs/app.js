@@ -570,8 +570,16 @@ function enrich(reporte, liqui, recibos) {
       emp.bruto = r.bruto; emp.neto = r.neto;
       emp.contrib = r.total_contribuciones; emp.costo = r.costo_empleador;
       emp.n_conceptos = r.conceptos.length;
-      emp.torta = (r.porcentajes_torta && r.porcentajes_torta.length)
-        ? Math.round(r.porcentajes_torta.reduce((a, b) => a + b, 0) * 100) / 100 : null;
+      // La columna muestra cuánto suma el gráfico de torta del recibo (debe dar ~100%).
+      // Si el empleado tiene varios recibos hay una torta por recibo: se muestra la que MÁS
+      // se aleja de 100, que es la que hay que mirar. Sumarlas todas daba N×100%.
+      const tortas = (r.tortas && r.tortas.length)
+        ? r.tortas
+        : (r.porcentajes_torta && r.porcentajes_torta.length ? [r.porcentajes_torta] : []);
+      const sumas = tortas.map((t) => Math.round(t.reduce((a, b) => a + b, 0) * 100) / 100);
+      emp.torta = sumas.length
+        ? sumas.reduce((peor, s) => (Math.abs(s - 100) > Math.abs(peor - 100) ? s : peor))
+        : null;
     } else {
       emp.bruto = emp.neto = emp.contrib = emp.costo = null;
       emp.n_conceptos = 0; emp.torta = null;
