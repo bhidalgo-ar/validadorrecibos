@@ -11,7 +11,7 @@ sustituta, de `/verify-golden`:
 | Skill | Qué prueba | Necesita datos reales |
 |-------|-----------|------------------------|
 | `smoke-ui`     | que la UI bootea, no tira errores JS y (si existe) el tema togglea | **No** |
-| `verify-golden`| que el MOTOR reproduce el golden 531/518/13                        | **Sí** (PDFs gitignoreados) |
+| `verify-golden`| que el MOTOR reproduce el golden 531/519/12                        | **Sí** (PDFs gitignoreados) |
 
 Por eso `smoke-ui` se puede correr siempre (no toca PII), y es la verificación adecuada para
 cambios **solo de UI** (estilos, dark mode, layout) donde correr el golden no aporta.

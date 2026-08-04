@@ -9,15 +9,19 @@
 //
 // Totales extraídos de:
 //   'Total Haberes: X  Total Descuentos: X  ...  Total Netos: X'
-//   'Total Imponible: X  ...  Costo Laboral: X'   <- Costo Laboral = Total Contribuciones
+//   'Total Contribuciones: X  Reducciones de Contrib.: X'  <- total de contribuciones
+//   'Total Imponible: X  ...  Costo Laboral: X'   <- respaldo del total de contribuciones
 //
 // Módulo ES, sin dependencias de DOM/window. Importable en Node (ESM) y navegador.
 // A diferencia del Python (que abre los PDF con pdfplumber), esta versión recibe el
 // texto ya extraído: pagesByFile = Array<Array<string>> (un array por archivo PDF,
 // texto de cada página en orden). El caller usa pdf-extract.js para obtener el texto.
 
-// Códigos de concepto internos — nunca requeridos en recibos
-const INTERNAL_CODES = new Set(['5911', '5921', '7100']);
+// Códigos de concepto internos — nunca requeridos en recibos.
+// 5700 es la 'Base Maternidad LSD': la base que se informa en el Libro de Sueldos Digital
+// mientras la empleada está de licencia por maternidad. Es un dato para AFIP, no un importe
+// que se le pague: el recibo (con bruto y neto en 0) no lo muestra ni puede mostrarlo.
+const INTERNAL_CODES = new Set(['5700', '5911', '5921', '7100']);
 
 // Palabras clave que marcan conceptos de provisión/internos (case-insensitive)
 const PROVISION_KEYWORDS = [
@@ -56,13 +60,17 @@ const _LEGAJO_RE = /Legajo:\s*(\d+)\s+Empleado:\s*(.+?)\s+[^\s:]+:/;
 const _TOTAL_HABERES_RE = /Total Haberes:\s*([\d.,]+)/;
 const _TOTAL_DESC_RE    = /Total Descuentos:\s*([\d.,]+)/;
 const _TOTAL_NETOS_RE   = /Total Netos:\s*([\d.,]+)/;
-// Costo Laboral = Total Contribuciones (confiable, sin el bug de merge de pdfplumber)
-const _COSTO_LABORAL_RE = /Costo Laboral:\s*([\d.,]+)/;
-// Fuente alternativa del total de contribuciones: no todas las plantillas Meta 4 imprimen
-// el rótulo 'Costo Laboral:'; algunas sólo traen 'Total Contribuciones:'. Sin este fallback
-// total_contrib quedaba en null y el validador reportaba "Total Contribuciones ... (uno es N/D)"
-// para TODOS los empleados. Cuando ambos rótulos están, gana 'Costo Laboral:'.
+// Fuente AUTORITATIVA del total de contribuciones: es el número que el recibo imprime como
+// 'SUB TOTAL CONTRIBUCIONES EMPLEADOR', o sea el que hay que comparar.
 const _TOTAL_CONTRIB_RE = /Total Contribuciones:\s*([\d.,]+)/;
+// Respaldo cuando la plantilla NO imprime 'Total Contribuciones:'. Ojo: 'Costo Laboral' NO es
+// sinónimo — en las plantillas con aportes a terceros de convenio (seguro de sepelio, INACAP,
+// contribución extraordinaria del CCT, capacitación sindical) 'Costo Laboral' trae sólo las
+// contribuciones de seguridad social y deja afuera esos costos derivados del CCT, que el recibo
+// SÍ suma en su subtotal. Tomarlo como total daba un TOTAL_DIFIERE de decenas de miles en casi
+// todos los empleados del lote. En las plantillas sin terceros los dos rótulos coinciden peso
+// a peso, que es por lo que este respaldo alcanzaba hasta ahora.
+const _COSTO_LABORAL_RE = /Costo Laboral:\s*([\d.,]+)/;
 
 // Equivalente a Python str.lstrip('0') con fallback a '0'.
 function _lstripZeros(s) {
@@ -141,7 +149,7 @@ function _flushEmployee(current, results) {
 // currentHolder es un array mutable que mantiene estado entre líneas/páginas:
 //   [0] = empleado en curso (o null)
 //   [1] = true si ya se leyó alguna línea de totales del bloque en curso
-//   [2] = true si total_contrib vino de 'Costo Laboral:' (fuente autoritativa)
+//   [2] = true si total_contrib vino de 'Total Contribuciones:' (fuente autoritativa)
 function _parseText(text, results, currentHolder) {
   for (let line of text.split('\n')) {
     line = line.trim();
@@ -195,19 +203,19 @@ function _parseText(text, results, currentHolder) {
       continue;
     }
 
-    const mCl = _COSTO_LABORAL_RE.exec(line);
-    if (mCl) {
-      emp.total_contrib = parseMoney(mCl[1]);
+    const mTc = _TOTAL_CONTRIB_RE.exec(line);
+    if (mTc) {
+      emp.total_contrib = parseMoney(mTc[1]);
       currentHolder[1] = true;
       currentHolder[2] = true;
       continue;
     }
 
-    const mTc = _TOTAL_CONTRIB_RE.exec(line);
-    if (mTc) {
-      // Sólo si 'Costo Laboral:' no lo definió: ese rótulo es el autoritativo.
+    const mCl = _COSTO_LABORAL_RE.exec(line);
+    if (mCl) {
+      // Sólo si 'Total Contribuciones:' no lo definió: ese rótulo es el autoritativo.
       if (!currentHolder[2]) {
-        emp.total_contrib = parseMoney(mTc[1]);
+        emp.total_contrib = parseMoney(mCl[1]);
       }
       currentHolder[1] = true;
       continue;

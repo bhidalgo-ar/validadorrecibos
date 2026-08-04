@@ -86,6 +86,16 @@ function _nuevoRecibo(pageNum) {
     conceptos: [],
     contribuciones: [],
     porcentajes_torta: [],
+    // Una entrada por recibo con gráfico de torta. Un empleado puede tener VARIOS recibos en
+    // el mismo PDF (el del mes más los ajustes de meses anteriores), y cada uno trae su propia
+    // torta que debe sumar ~100%. Acumular todos los porcentajes en una sola lista daba
+    // N×100% y disparaba un TORTA_NO_SUMA falso.
+    tortas: [],
+    // Códigos que aparecen DOS VECES en la misma página del recibo: eso es un recibo mal
+    // armado. Se detecta acá porque los conceptos de varios recibos del mismo empleado se
+    // consolidan después (_consolidarPorCodigo) y ahí ya no se distingue un duplicado real
+    // de un mismo concepto que viene en dos recibos distintos.
+    codigos_duplicados: [],
     paginas: [pageNum],
     n_paginas: 1,
     errores_parse: [],
@@ -110,12 +120,15 @@ function _parsePage(text, pageNum) {
 
     // --- HEADER: busca legajo + nombre + bruto ---
     if (state === 'HEADER') {
-      // El legajo no tiene largo fijo: hay clientes con 3-4 dígitos y otros con
-      // legajos largos (7+, ej. los del padrón de la empresa usuaria). Acotarlo a
-      // 6 dígitos hacía que el header NO matcheara y la página entera se descartara
-      // por "no se detectó legajo" -> el recibo quedaba SIN_PAR contra la liquidación.
+      // El legajo no tiene largo fijo: hay clientes con 3-4 dígitos, otros con legajos
+      // largos (7+, ej. los del padrón de la empresa usuaria) y otros que numeran desde 1
+      // (legajos de 1 y 2 dígitos). Cualquier mínimo o máximo hacía que el header NO
+      // matcheara y la página entera se descartara por "no se detectó legajo" -> el recibo
+      // quedaba SIN_PAR contra la liquidación. Lo que delimita el legajo no es su largo sino
+      // la posición: en la fila 'MES AÑO APELLIDO Y NOMBRE LEGAJO SUELDO BRUTO' es el número
+      // que va pegado antes del importe del bruto ('$ ...'), y eso es lo que exige el patrón.
       const reHeader = new RegExp(
-        MESES + '\\s+\\d{4}\\s+(.+?)\\s+(\\d{3,12})\\s+\\$\\s*([\\d.,]+)'
+        MESES + '\\s+\\d{4}\\s+(.+?)\\s+(\\d{1,12})\\s+\\$\\s*([\\d.,]+)'
       );
       const m = line.match(reHeader);
       if (m) {
@@ -213,6 +226,22 @@ function _parsePage(text, pageNum) {
     return null;
   }
 
+  // La torta de esta página es una unidad: se guarda aparte para poder validarla sola
+  // cuando el empleado tiene más de un recibo.
+  if (rp.porcentajes_torta.length) {
+    rp.tortas.push(rp.porcentajes_torta.slice());
+  }
+
+  // Códigos repetidos dentro de esta misma página (ver el comentario del campo).
+  const vistos = new Set();
+  for (const c of rp.conceptos) {
+    if (vistos.has(c.codigo)) {
+      rp.codigos_duplicados.push({ codigo: c.codigo, descripcion: c.descripcion });
+    } else {
+      vistos.add(c.codigo);
+    }
+  }
+
   return rp;
 }
 
@@ -290,20 +319,50 @@ function _mergeContinuacion(base, cont, pageNum) {
   }
   if (!base.porcentajes_torta.length) {
     base.porcentajes_torta.push(...cont.porcentajes_torta);
+    // Es la MISMA torta del recibo anterior (venía cortada en la hoja siguiente), no una nueva.
+    if (cont.porcentajes_torta.length) {
+      base.tortas.push(cont.porcentajes_torta.slice());
+    }
   }
   base.paginas.push(pageNum);
   base.n_paginas += 1;
 }
 
 /**
- * Suma los datos de la página extra dentro de base (empleados multi-página).
+ * Junta en una sola lista los conceptos que comparten código, sumando los importes.
+ * Un empleado puede tener varios recibos en el mismo PDF (el del mes y los ajustes de meses
+ * anteriores) y el mismo concepto aparece en más de uno. La liquidación ya viene consolidada
+ * así (ver _consolidate en parser-liquidacion-pdf), de modo que sin esto el validador comparaba
+ * el total de la liquidación contra el importe de UN solo recibo: daba MONTO_DIFIERE en casi
+ * todos los conceptos y un CONCEPTO_DUPLICADO por cada código repetido, siendo que la suma
+ * cierra peso a peso. Un código repetido DENTRO de una misma página sigue reportándose como
+ * duplicado (ahí sí es un recibo mal armado): eso se detecta antes, en _parsePage, y viaja en
+ * `codigos_duplicados`.
+ */
+function _consolidarPorCodigo(items) {
+  const merged = new Map();
+  for (const c of items) {
+    const prev = merged.get(c.codigo);
+    if (prev) {
+      merged.set(c.codigo, { ...prev, monto: _round2(prev.monto + c.monto) });
+    } else {
+      merged.set(c.codigo, { ...c });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+/**
+ * Suma los datos de la página extra dentro de base (empleados con más de un recibo).
  */
 function _mergePages(base, extra) {
-  base.conceptos.push(...extra.conceptos);
-  base.contribuciones.push(...extra.contribuciones);
+  base.conceptos = _consolidarPorCodigo([...base.conceptos, ...extra.conceptos]);
+  base.contribuciones = _consolidarPorCodigo([...base.contribuciones, ...extra.contribuciones]);
   base.paginas.push(...extra.paginas);
   base.n_paginas += 1;
   base.porcentajes_torta.push(...extra.porcentajes_torta);
+  base.tortas.push(...extra.tortas);
+  base.codigos_duplicados.push(...extra.codigos_duplicados);
 
   for (const field of ['bruto', 'neto', 'total_contribuciones', 'costo_empleador']) {
     const bv = base[field];
